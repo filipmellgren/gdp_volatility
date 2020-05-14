@@ -1,0 +1,79 @@
+---
+title: "GDP Volatility"
+author: "Filip Mellgren"
+date: '2020-05-09'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+This analysis was inspired by: https://ro.uow.edu.au/cgi/viewcontent.cgi?article=1280&context=aabfj
+https://www.jstor.org/stable/pdf/27647202.pdf?refreqid=excelsior%3Ada7c65572902730eb32916bc6ff4825c
+
+Model: Start with the DCC, it is the best benchmark model.
+
+Two additional params on top of CCC. Very parsimonous, not exploding in number of assets. Assume  nassume same params for every pairs.
+
+Correlation is allowed to be time variant in the DCC (dynamic conditional correlation)
+
+Problems: assumption that two params are the same for al pairs can be a bit relaxed. Assets of similar sectors can be shared for instance. 
+
+Extensions: PCA, factor GARCH. Dimensioanlity reduction.
+
+Blog post on how this thing works: https://www.r-bloggers.com/the-garch-dcc-model-and-2-stage-dccmvt-estimation/
+
+```{r}
+library(rmgarch) # https://cran.r-project.org/web/packages/rmgarch/rmgarch.pdf
+# More helpful slides on the above package: https://faculty.washington.edu/ezivot/econ589/DCCgarchPowerpoint.pdf
+library(rio)
+library(tidyverse)
+library(lubridate)
+library(rmgarch)
+library(xts)
+```
+
+```{r parameters}
+start_date <- as.POSIXct("1961-01-01")
+end_date <- as.POSIXct("2019-12-01")
+countries <- c("FRA", "GBR", "ESP")
+n_countries <- length(countries)
+```
+
+
+```{r import_data}
+df <- import("data/gdp-quarterly-growth-eu.csv")
+df %>% head()
+df <- df %>% select(LOCATION, TIME, Value) %>% spread(LOCATION, Value) %>% as_tibble()
+```
+
+```{r feature_eng}
+# Convert TIME variable to the date format using lubridate
+df <- df %>% mutate(TIME = parse_date_time(TIME, orders = "%Y-%q"))
+
+# convert to xts format
+df <- df %>% filter(TIME > start_date, TIME < end_date) %>% select(countries,TIME)
+time <- df$TIME
+df <- df %>% select(-TIME)
+xts <- xts(x=df, order.by=time)
+```
+
+```{r fit}
+# Create the models that we will be fitting
+spec <- ugarchspec()
+multispec <- multispec(replicate(n_countries, spec))
+
+#dccspec # Method for creating a DCC-GARCH specification object prior to fitting.
+dcc_garch_spec <- dccspec(multispec)
+# dccfit
+fit <- dccfit(dcc_garch_spec, xts)
+```
+
+```{r plot}
+# Gives conditional correlation, plus the usual stuff
+plot(fit)
+```
+
+
