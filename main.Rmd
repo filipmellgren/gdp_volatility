@@ -3,9 +3,10 @@ title: "GDP Volatility"
 author: "Filip Mellgren"
 date: '2020-05-09'
 output:
+  pdf_document:
+    toc: true
   html_document:
     df_print: kable
-  pdf_document: default
 ---
 bibliography: bibliography.bib
 
@@ -33,6 +34,333 @@ end_date <- as.POSIXct("2019-12-01")
 countries <- c("FRA", "GBR", "DEU", "ESP")
 n_countries <- length(countries)
 ```
+
+# Introduction
+
+For any common currency area, it is important that there is a certain degree of business cycle synchronization in order to make monetary policy effective (Frankel and Rose, 1998). An example of a common currency area composed of countries with autonomous fiscal policy and tax policies is the Eurozone, which was established on the 1st of January 1999. It is therefore of interest to investigate to what extent the business cycles of countries within the Eurozone can be said to move together.
+
+To investigate the degree of business cycle synchronisation, I study the development of GDP synchronization across coutries over time using a dynamic conditional correlation (DCC) approach CITE Engle (2002). This model is a widely used benchmark model that is flexible without requiring too many parameters to be estimated.
+
+# Data
+The available data set contains information on seasonally adjusted percentage change in constant prices gross domestic product for XX countries. The frequency at which the data is measured is quarterly and in the raw data, each value denotes the percentage change from one quarter to the next. This data set was downloaded from the OECD https://data.oecd.org/gdp/quarterly-gdp.htm
+cite: "OECD (2020), Quarterly GDP (indicator). doi: 10.1787/b86d1fc8-en (Accessed on 15 May 2020)".
+
+For most countries, the series start in the second quarter of 1960...
+
+```{r import_data}
+df <- import("data/gdp-quarterly-growth-eu2.csv")
+df %>% head()
+df <- df %>% select(LOCATION, TIME, Value) %>% spread(LOCATION, Value) %>% as_tibble()
+```
+
+```{r wrangle}
+# Convert TIME variable to the date format using lubridate
+df <- df %>% mutate(TIME = parse_date_time(TIME, orders = "%Y-%q"))
+
+# Filter away what we don't use:
+df <- df %>% filter(TIME > start_date, TIME < end_date) %>% select(all_of(countries),TIME)
+```
+
+## Stylised facts
+By converting the series to indexed values, we immediatelly observe several key characteristics of the seasonally adjusted GDP data.
+
+```{r HP}
+# o) Eliminate remaining seasonality and other non-stationary components
+# i) also, remove the trend here
+
+# HP filter removes the trend, not the noise
+# BP filter to smooth away the noise
+# Create the volume index, necessary for the HP filter
+#df_ix <- df %>% select(c(countries), TIME) %>% gather(key = "country", value = "change", c(countries))
+to_pct <- function(x){
+  x <- x/100
+  return(x)
+}
+
+to_levels <- function(x){
+  x <- cumprod(x + 1)
+  return(x)
+}
+
+hpfilter1600 <- function(x){
+  x <- mFilter::hpfilter(x, freq = 1600)
+  return(x$cycle)
+}
+
+impute_na <- function(x){
+  x <- ifelse(is.na(x), 0, x)
+  return(x)
+}
+
+df_levels <- df %>% 
+  mutate_at(countries, to_pct) %>%
+  mutate_at(countries, impute_na) %>%
+  mutate_at(countries, to_levels)
+
+# Plot the growth component of the unfiltered data:
+qgrowth_plot <- df %>% gather(key = "country", value = "g", c(countries)) %>%
+  ggplot(aes(x = TIME, y = g, color = country)) + geom_line()
+
+# Plot the levels of the series
+levels_plot <- df_levels %>% gather(key = "country", value = "Index", c(countries)) %>% ggplot(aes(x = TIME, y = Index, color = country)) + geom_line()
+
+# Apply HP filter and extract the cyclical component
+df_hp <- df_levels %>% mutate_at(countries, hpfilter1600)
+
+# Plot the remaining cyclical component:
+cyclical_plot <- df_hp %>% gather(key = "country", value = "Index", c(countries)) %>% ggplot(aes(x = TIME, y = Index, color = country)) + geom_line()
+
+# convert to xts format
+time <- df_hp$TIME
+df_ts <- df_hp %>% select(-TIME)
+# df_ts <- df_hp %>% select(-TIME)
+df_ts <- xts(x=df_ts, order.by=time)
+
+```
+
+```{r plot_levels}
+levels_plot
+```
+
+First, for all countries, the GDP series exhibits a clear upward trend. Second, for some countries, the trend seems to be varying over time. Another important feature is that volatility seems to vary. By looking at the quarter on quarter percentage growth series, it becomes clear that some periods are marked by significantly more severe swings than normal periods. In particular, it appears that  growth was the most volatile during the start of the series, entered a period of relative calmness, and was then severly disturbed again during the Great Recession of 2008 which is very pronounced in the data. The period following the Great Recession was marked by a relatively large volatility during the Euro crisis. The series can thus safely be said to exhibit heteroskedasticity.
+
+```{r plot_growth}
+qgrowth_plot
+```
+
+The fact that the series shows a clear trend makes direct comparison of business cycles awry and it is therefore necessary to get rid of this trend. One alternative is to work with the growth data, another is to use a so called Hodrick-Prescott (HP) filter with frequency $\lambda = 1600$, which has been commonly employed on macro economic time series. Despite the fact that the HP filter is known to contain some flaws cite cite. 
+
+In the next figure, the quarter to quarter growth rate is plotted above the cyclical component from the HP filter. After applying the HP-filter, we have eliminated the trend source of variation and now have to deal with a cyclical component that is probably still autocorrelated, i.e. cycles tends to be somewhat persistent.
+
+```{r}
+qgrowth_plot / cyclical_plot
+```
+TODO: might want to use first differencing as an alternative
+Difference in amplitude is important to consider (Altavilla 2004)
+Stochastic trend (p.255 engle)
+From Jong a Pin paper:
+However, as Baxter and King (1999) point out, first differencing does
+remove a trend from a series, but potentially at the cost of a shift in the peaks and
+troughs of the differenced series and a larger volatility
+
+
+# Method, dynamic conditional correlation
+
+In this section, I further adapt the series by modelling the conditional means and variances using the GARCH(p, q) framework.
+In a GARCH(p,q) model, there is both an autoregressive and a moving average component that are used to estimate the conditional covariance of a series. In a GARCH model, the error component supposedly acts like an ARMA process. Hence, an ACF and PCF of the squared error residuals can help in setting the right order of the $p$ and the $q$.
+
+A simple alternative to using a GARCH model
+
+Engle (2002) assumes the covariance matrix:
+$\mathbf{H}_t = \mathbf{\Sigma_t^{1/2}C_t\Sigma_t^{1/2}}$
+
+Discuss parsimonity
+
+Why not just use rolling correlation?
+* no need to establish a window span
+* loose observations at the start
+* No shock persistencies
+GO to cerqueira and martins (2009) for more of this discussion
+
+## Estimation stage (identification of orders p and q, step 2 slide 30 chapter 1)
+In this section, the goal is to arrive at a parsimonous specification of the conditional mean and variance. 
+
+While the analysis supposedly covers several countries, the ARMA and GARCH modelling is limited to cover just a single country which is then applied on the other countries. The alternative would be to repeat the analysis once for each country, and potentially arrive at highly specialised models for each country. However, I limit the analysis to focus on a single country, and then apply the best model on all other countries. A seemingly suitable candidate for finding a good model specification would be the Euro Area composite variable as it is a weighted average of multiple countries, but as it lacks data prior to XXXX, I choose the longest time series for the largest country available, namely Germany. 
+
+```{r identification}
+# ii) a priori identification of the orders p and q;
+acf(data.frame(df_ts$DEU), main = "DEU") # data.frame because xts gave weird x-axis
+pacf(data.frame(df_ts$DEU), main = "DEU")
+```
+
+
+By the ACF, we see that the series is dependent on past values up to 14 lags, or more than three years back in time and that values tend to be similar to those close in time, negatively related to values that are moderately distant, and unrelated to values stretching very far back. This pattern is consistent with the idea of a cycle.
+
+By the PACF, we learn that the strongest relation is with the most recent value. If the last period was above (below) trend, the next period is likely to be above (below) as well. However, we do observe significant and negative lagged values up to order five. 
+
+Based on these graphs, a plausible model could be an AR process up to order 5. As is evident by the ACF, there is a cyclical pattern and by the PACF, this could be explained by several negative AR terms. 
+
+Test mean models: AR(5), ARMA(1,1) lower ar gave better BIC
+
+Next, I consider a model of the variance:
+
+```{r}
+acf(data.frame((df_ts$DEU)^2), main = "DEU") 
+pacf(data.frame((df_ts$DEU)^2), main = "DEU")
+```
+Test the GARCH(1,1), 
+
+Based on the ACF plot of the squared deviations, there is a persistent correlation with lagged values that seems to initially be decaying exponentially, but then level out. The PACF suggests that the number of AR terms should be limited to 1. Hence, there is a good case to be made for a GARCH(1,0). Nontheless, because the GARCH(1,1) model is commonly employed, I choose this specification for my model of the conditional variance.
+
+In total, I have the following two models:
+
+```{r model}
+# Create a DCC-GARCH specification object prior to fitting.
+spec_ar5_11 <- ugarchspec(mean.model = list(armaOrder = c(5,0)), variance.model = list(garchOrder = c(1, 1)), distribution.model = "norm")
+spec_arma11_11 <- ugarchspec(mean.model = list(armaOrder = c(1,1)), variance.model = list(garchOrder = c(1, 1)))
+
+multispec_ar5_11 <- multispec(replicate(n_countries, spec_ar5_11)) # same as ugarchspec but multivariate setting
+multispec_arma11_11 <- multispec(replicate(n_countries, spec_arma11_11))
+
+dcc_spec_ar5_11 <- dccspec(multispec_ar5_11) # Set DCC order
+dcc_spec_arma11_11 <- dccspec(multispec_arma11_11)
+```
+
+```{r estimate}
+# iii) estimation of the parameters
+# dccfit
+# Estimate univariate models first for robustness
+#multifit <- multifit(multispec, df_ts)
+#multifit
+# DCC model:
+dccfit_ar5_11 <- dccfit(dcc_spec_ar5_11, df_ts) 
+dccfit_arma11_11 <- dccfit(dcc_spec_arma11_11, df_ts) 
+```
+
+
+## Model diagnostics stationarity checks
+
+Discuss the GARCH fit. p150
+"The esti-mated residuals should be serially uncorrelated and should not display any remaining conditional volatility. You can test to ensure that your model has captured these proper- ties by standardizing the residuals as indicated above. Simply d ivid by  1/2 t in order to obtain an estimate of what we have been calling the vt sequence. Since epsilont has a
+zero mean and a variance of ht, you can think of vt = epst/(ht) 12 as the standardized
+value of eps t. The resulting series, which we will call st, should have a mean of zero and
+a variance of unity."
+
+Do I then use a GARCH and do the same tests for volatility? Seemingly yes (Engle p137). Look at acf and pacf of the squared residuals.
+
+OR: GARCH models are estimated simultanously by ML. Test for remaining Garch errors using McLeod Li
+
+```{r standardise_residuals}
+# Here, I standardise the residuals by dividing by the estimated standard deviation
+res <- residuals(dccfit_ar5_11)
+sig <- sigma(dccfit_ar5_11)
+std_res <- res/sig
+
+```
+
+
+### Remaining serial correlation, Test model for mean
+Now, I test whether the estimated GARCH model leads to serially uncorrelated error terms. The first step towards checking this is to standardise the residuals by dividing them with the estimated conditional standard deviation. Note that this value will in general be unique for each country-time pair because of the properties of the DCC model. The Ljung-Box Q(8)-statistic, is formed which gives a test of the null hypothesis that the lags 1 through 8 are not significantly different from 0, i.e. that the residuals from the AR model follow a white noise process. The choice of 8 is somewhat arbitrary but corresponds to two years of data, which seems long enough to accomodate any lagged effects, and short enough to not dilute the power of the test with lags that are so far away that they likely have no effect on the residuals. Ideally then, this test is not significant for any of the countries if the model suits the data well enough.
+
+```{r}
+# iv) validation based on residual analysis
+residuals_ar5_11 <- residuals((dccfit_ar5_11))
+#acf(residuals_ar5_11)
+#pacf(residuals_ar5_11)
+# Ljung Box test
+LB_test_p <- c()
+for (c in countries) {
+  test_residuals <- data.frame(residuals_ar5_11) %>% select(c)
+  p_value <- Box.test(test_residuals, type = "Ljung", lag = 8)$p.value
+  LB_test_p <- c(LB_test_p, p_value)
+}
+LB_test_table <- data.frame(countries, LB_test_p)
+
+# Jarque Bera test for normality coupled with QQ plot
+qqnorm(std_res$GBR)
+qqline(std_res$GBR)
+```
+
+
+### Remaining GARCH efects
+Next, I want to test whether there are remaining GARCH effects, or if the model of the conditional variance is correctly specified. The procedure is similar to when the residuals of the model of the conditional mean was tested with the main difference that it is now the squared standardized series that is being tested. Hence, a Ljung-Box Q(8) statistic is formed for each country.
+
+```{r cond_variance_LB}
+LB_test_var_p <- c()
+for (c in countries) {
+  test_residuals <- (data.frame(residuals_ar5_11) %>% select(c))^2
+  p_value <- Box.test(test_residuals, type = "Ljung", lag = 8)$p.value
+  LB_test_var_p <- c(LB_test_var_p, p_value)
+}
+LB_test_table <- data.frame(countries, LB_test_var_p)
+
+
+plot((residuals_ar5_11^2)$DEU)
+```
+
+
+```{r selection}
+# v) select a model 
+```
+
+
+# Results
+
+```{r extract_data}
+# Extract the data to a format we can easily plot:
+corrs <- rcor(dccfit_ar5_11)
+corrs[,,dim(corrs)[3]] # Inspect last value
+
+gen_dcc_data <- function(base_country){
+ ix <- 1
+ corr_df <- data.frame(corrs[base_country,base_country,])
+ for (country in countries) {
+   ix <- ix +1
+   corr_df <- cbind(corr_df, corrs[base_country,country,])
+   }
+ names(corr_df) <- c("base", countries)
+ corr_df <- corr_df %>% select(-base) # drop the initialising column
+ # To access the date variable, convert to xts and then back to df
+ corr_df <- fortify(as.xts(corr_df))
+ # Gather to enable easy plotting
+ corr_df <- corr_df %>% gather(key = "country", value = "correlation", countries)
+ return(corr_df)
+}
+
+plot_dcc_data <- function(df){
+  p <- df %>% ggplot(aes(x = Index, y = correlation, color = country)) + 
+    geom_line() + coord_cartesian(ylim = c(-0.1, 0.75))
+  return(p)
+}
+
+# FRA
+fra <- plot_dcc_data(gen_dcc_data(1)) + labs(title = "France")
+# GBR
+gbr <- plot_dcc_data(gen_dcc_data(2)) + labs(title = "United Kingdom")
+# DEU
+deu <- plot_dcc_data(gen_dcc_data(3)) + labs(title = "Germany")
+# ESP
+esp <- plot_dcc_data(gen_dcc_data(4)) + labs(title = "Spain")
+
+(fra + gbr)/(deu + esp)
+
+# Plot in xts style
+#cor_FRA_ESP <- cbind(cor1[2,4,], cor1[2,4,])
+#cor_FRA_ESP <- as.xts(esp_df)
+#plot(cor_FRA_ESP)
+```
+
+## Table of DCC GARCH estimated results
+* Conditional mean
+* Conditional variance
+
+## Compare to rolling correlation
+
+```{r plot}
+# plot(dccfit)
+
+```
+
+# Forecast where the conditional correlation is heading.
+
+# Discussion of relevant periods
+
+# Notes
+## ARIMA models (notes)
+Ljung box. test jointly that veral autocorrelations of the returns are zero
+
+Slide 29 chapter 1, stationarity assumption is unrealistic ecause of seasonality or cyclical components, remove those components in a first stage of the analysis. 
+
+ARIMA models: Box Jenkins approach, slide 30. Not a big problem of portmanteau rejecting the null of white noise. No problem as the model selection was based on training, next we just care about how good the model is out of sample.
+
+His code includes exmaple of GDP DEFLATOR and how to extract compinentsn out of it
+
+Normality test using Jarque Bera
+
+Unable to capture condtional second order moments
+## GARCH 
+DCC- MacGyver method???
+Assumes that the conditional variance are deteminsitic min 44 lecture 3 at break to chapter 2.
 
 # Task
 data analysis icluding original discussion of a data set with a clear final goal
@@ -66,232 +394,6 @@ P. 974 about the data used to analyse volatitlity:  "Let yt be the quarterly GDP
 at an annual rate". They look att individual countries and not conditional correlation between countries.
 
 Questions:
-* Do we analyse the raw growth data or some HP filtered data? If so, what component?
-- Longterm or short term being of interest might address this
 * How can we select the right DCC specification?
 
-# Introduction
-Following the introduction of the common currency among EMU countries, it is of importance that business cycles are synchronised in order to make monetary policy widely effective. 
 
-To investigate the degree of business cycle synchronisation, I look at the development of correlations across coutries over time using a dynamic conditional correlation approach CITE Engle (2002), a widely used benchmark model that is flexible without requiring too many parameters to be estimated.
-
-# Data
-The data set was downloaded from the OECD https://data.oecd.org/gdp/quarterly-gdp.htm
-cite: "OECD (2020), Quarterly GDP (indicator). doi: 10.1787/b86d1fc8-en (Accessed on 15 May 2020)"
-
-The data set contains information on seasonally adjsuted percentage change in constant prices gross domestic product. The frequency of the data is quarterly and each value denotes the percentage change from one quarter to the next. Included in the data set are 25 EU countries, including the United Kingdom, but excluding Cyprus, Croatia, and Malta. The series start in 1955:2. 
-
-```{r import_data}
-df <- import("data/gdp-quarterly-growth-eu.csv")
-df %>% distinct(LOCATION)
-df %>% head()
-df <- df %>% select(LOCATION, TIME, Value) %>% spread(LOCATION, Value) %>% as_tibble()
-```
-
-```{r wrangle}
-# Convert TIME variable to the date format using lubridate
-df <- df %>% mutate(TIME = parse_date_time(TIME, orders = "%Y-%q"))
-
-# Filter away what we don't use:
-df <- df %>% filter(TIME > start_date, TIME < end_date) %>% select(all_of(countries),TIME)
-```
-
-
-## Stylised facts
-Frequency for macroeconomic variables is low
-Describe stylised facts, such as varying volatility
-First lienar part, white noise
-Second moment, many many lags are relevant. Conditional second order moments.
-
-## HP filter
-
-```{r HP}
-# Create the volume index, necessary for the HP filter
-#df_ix <- df %>% select(c(countries), TIME) %>% gather(key = "country", value = "change", c(countries))
-to_pct <- function(x){
-  x <- x/100
-  return(x)
-}
-
-to_levels <- function(x){
-  x <- cumprod(x + 1)
-  return(x)
-}
-
-hpfilter1600 <- function(x){
-  x <- mFilter::hpfilter(x, freq = 1600)
-  return(x$cycle)
-}
-
-df_levels <- df %>% 
-  mutate_at(countries, to_pct) %>%
-  mutate_at(countries, to_levels)
-
-# Plot the levels of the series
-df_levels %>% gather(key = "country", value = "Index", c(countries)) %>% ggplot(aes(x = TIME, y = Index, color = country)) + geom_line()
-
-# Apply HP filter and extract the cyclical component
-df_levels <- df_levels %>% mutate_at(countries, hpfilter1600)
-
-# Plot the remaining cyclical component:
-df_levels %>% gather(key = "country", value = "Index", c(countries)) %>% ggplot(aes(x = TIME, y = Index, color = country)) + geom_line()
-
-# convert to xts format
-time <- df_levels$TIME
-df_ts <- df_levels %>% select(-TIME)
-df_ts <- xts(x=df_ts, order.by=time)
-```
-
-Think I should seasonally adjust it: poland and emu does the following:
-seasonally adjusted dices in logarithms, referring to constant levels(?). Cyclical components are extracted using the HP filter ng appropriate parameter (i want quarterly)
-
-
-
-
-# stationarity checks
-## Descriptive statistics
-* Jarque bera 
-* ADF test
-
-
-## ARIMA models (notes)
-Ljung box. test jointly that veral autocorrelations of the returns are zero
-
-Slide 29 chapter 1, stationarity assumption is unrealistic ecause of seasonality or cyclical components, remove those components in a first stage of the analysis. 
-
-ARIMA models: Box Jenkins approach, slide 30. Not a big problem of portmanteau rejecting the null of white noise. No problem as the model selection was based on training, next we just care about how good the model is out of sample.
-
-His code includes exmaple of GDP DEFLATOR and how to extract compinentsn out of it
-
-Normality test using Jarque Bera
-
-Unable to capture condtional second order moments
-## GARCH 
-DCC- MacGyver method???
-Assumes that the conditional variance are deteminsitic min 44 lecture 3 at break to chapter 2.
-
-### multivariate tationary process
-
-
-```{r}
-# Inspect current data:
-df %>% gather(key = "country", value = "g", FRA, GBR, DEU, ESP) %>%
-  ggplot(aes(x = TIME, y = g, color = country)) + geom_line()
-```
-
-```{r hp_filter}
-# Deseasonalise using a HP filter to measure the cycle
-# TODO: need a good theorectical back up for this
-# Also, how does the function work?
-# x <- mFilter::hpfilter(df$FRA, freq = 4)
-```
-
-
-```{r growth}
-
-```
-
-```{r volatiltiy clustering}
-
-```
-
-
-```{r rolling_corr}
-
-
-```
-
-# Method, garchfit
-
-# Method, dynamic conditional correlation
-Engle (2002) assumes the covariance matrix:
-
-$ \mathbf{H}_t = \mathbf{\Sigma_t^{1/2}C_t\Sigma_t^{1/2}} $
-
-Discuss parsimonity
-
-Why not just use rolling correlation?
-* no need to establish a window span
-* loose observations at the start
-* No shock persistencies
-GO to cerqueira and martins (2009) for more of this discussion
-
-```{r model}
-# Create a DCC-GARCH specification object prior to fitting.
-spec <- ugarchspec()
-#spec # Info on what type of model we use inlcuding conditional distribution
-multispec <- multispec(replicate(n_countries, spec)) # same as ugarchspec but multivariate setting
-dcc_garch_spec <- dccspec(multispec)
-```
-
-```{r fit}
-# dccfit
-# Estimate univariate models first for robustness
-multifit <- multifit(multispec, df_ts)
-#multifit
-# DCC model:
-dccfit <- dccfit(dcc_garch_spec, df_ts)
-#dccfit # replicates what was in the multifit (did we do the part step as a check?)
-```
-
-# Results
-
-```{r extract_data}
-# Extract the data to a format we can easily plot:
-corrs <- rcor(dccfit)
-corrs[,,dim(corrs)[3]] # Inspect last value
-
-gen_dcc_data <- function(base_country){
- ix <- 1
- corr_df <- data.frame(corrs[base_country,base_country,])
- for (country in countries) {
-   ix <- ix +1
-   corr_df <- cbind(corr_df, corrs[base_country,country,])
-   }
- names(corr_df) <- c("base", countries)
- corr_df <- corr_df %>% select(-base) # drop the initialising column
- # To access the date variable, convert to xts and then back to df
- corr_df <- fortify(as.xts(corr_df))
- # Gather to enable easy plotting
- corr_df <- corr_df %>% gather(key = "country", value = "correlation", c(FRA, GBR, DEU, ESP))
- return(corr_df)
-}
-
-plot_dcc_data <- function(df){
-  p <- df %>% ggplot(aes(x = Index, y = correlation, color = country)) + 
-    geom_line() + coord_cartesian(ylim = c(-0.1, 0.75))
-  return(p)
-}
-
-# FRA
-fra <- plot_dcc_data(gen_dcc_data(1)) + labs(title = "France")
-# GBR
-gbr <- plot_dcc_data(gen_dcc_data(2)) + labs(title = "United Kingdom")
-# DEU
-deu <- plot_dcc_data(gen_dcc_data(3)) + labs(title = "Germany")
-# ESP
-esp <- plot_dcc_data(gen_dcc_data(4)) + labs(title = "Spain")
-
-(fra + gbr)/(deu + esp)
-
-
-# Plot in xts style
-#cor_FRA_ESP <- cbind(cor1[2,4,], cor1[2,4,])
-#cor_FRA_ESP <- as.xts(esp_df)
-#plot(cor_FRA_ESP)
-```
-
-## Table of DCC GARCH estimated results
-* Conditional mean
-* Conditional variance
-
-## Compare to rolling correlation
-
-```{r plot}
-# plot(dccfit)
-
-```
-
-# Forecast where the conditional correlation is heading.
-
-# Discussion of relevant periods
