@@ -27,27 +27,29 @@ library(xts)
 library(patchwork)
 library(zoo) # In tidyverse already?
 library(mFilter)
+library(forecast)
 ```
 
 ```{r parameters}
 start_date <- as.POSIXct("1961-01-01")
 end_date <- as.POSIXct("2019-12-01")
-countries <- c("FRA", "ITA", "DEU", "ESP")
+countries <- c("FRA", "ITA", "DEU", "ESP", "AUT")
 n_countries <- length(countries)
 ```
 
 egarch for leverage effect
 assymetric dcc for assymetric postiive and begative effects: https://www.researchgate.net/profile/Kevin_Sheppard/publication/5213502_Asymmetric_Dynamics_in_the_Correlations_of_Global_Equity_and_Bond_Returns/links/0c96052df10e17001d000000/Asymmetric-Dynamics-in-the-Correlations-of-Global-Equity-and-Bond-Returns.pdf
 
+
+
 # Introduction
 
-For any common currency area, it is important that there is a certain degree of business cycle synchronization in order to make monetary policy effective (Frankel and Rose, 1998). An example of a common currency area composed of countries having autonomous fiscal policy and tax policies is the Eurozone. It is therefore of interest to investigate to what extent the business cycles of countries within the Eurozone can be said to move together, and whether there has been a shift towards greater synchronisation after the introduction of the Euro in 1999.
+For any common currency area, it is important that there is a certain degree of business cycle synchronization in order to make monetary policy effective [@frankel1998endogenity]. An example of a common currency area composed of countries having autonomous fiscal policy and tax policies is the Eurozone. It is therefore of interest to investigate to what extent the business cycles of countries within the Eurozone can be said to move together, and whether there has been a shift towards greater synchronisation after the introduction of the Euro in 1999.
 
 To investigate the degree of business cycle synchronisation, I study the development of GDP across coutries over time using a dynamic conditional correlation (DCC) approach [@engle2002dynamic]. This model is a widely used benchmark model that is flexible without requiring too many parameters to be estimated.
 
 # Data
-The available data set contains information on seasonally adjusted percentage change in constant prices gross domestic product for TODO countries. The frequency at which the data is measured is quarterly and in the raw data, each value denotes the percentage change from one quarter to the next. This data set was downloaded from the OECD https://data.oecd.org/gdp/quarterly-gdp.htm
-cite: "OECD (2020), Quarterly GDP (indicator). doi: 10.1787/b86d1fc8-en (Accessed on 15 May 2020)".
+The available data set contains information on seasonally adjusted percentage change in constant prices gross domestic product for TODO countries. The frequency at which the data is measured is quarterly and in the raw data, each value denotes the percentage change from one quarter to the next. This data set was downloaded from the OECD [@oecddata].
 
 ```{r import_data}
 df <- import("data/gdp-quarterly-growth-eu2.csv")
@@ -81,7 +83,7 @@ By converting the series to indexed values, we immediately observe several key c
 # BP filter to smooth away the noise
 # Create the volume index, necessary for the HP filter
 #df_ix <- df %>% select(c(countries), TIME) %>% gather(key = "country", value = "change", c(countries))
-to_pct <- function(x){
+from_pct <- function(x){
   x <- x/100
   return(x)
 }
@@ -102,9 +104,14 @@ impute_na <- function(x){
 }
 
 df_levels <- df %>% 
-  mutate_at(countries, to_pct) %>%
+  mutate_at(countries, from_pct) %>%
   mutate_at(countries, impute_na) %>%
   mutate_at(countries, to_levels)
+
+# Convert growth data into numeric values, i.e. don't use percentage form.
+df <- df %>% 
+  mutate_at(countries, from_pct)
+
 
 # Plot the growth component of the unfiltered data:
 qgrowth_plot <- df %>% gather(key = "country", value = "g", c(countries)) %>%
@@ -118,13 +125,6 @@ df_hp <- df_levels %>% mutate_at(countries, hpfilter1600)
 
 # Plot the remaining cyclical component:
 cyclical_plot <- df_hp %>% gather(key = "country", value = "Index", c(countries)) %>% ggplot(aes(x = TIME, y = Index, color = country)) + geom_line()
-
-# convert to xts format
-time <- df_hp$TIME
-df_ts <- df_hp %>% select(-TIME)
-# df_ts <- df_hp %>% select(-TIME)
-df_ts <- xts(x=df_ts, order.by=time)
-
 ```
 
 ```{r plot_levels, fig.height = 2.5, fig.width = 7}
@@ -133,21 +133,23 @@ levels_plot
 
 First, for all countries, the GDP series exhibits a clear upward trend. Second, for some countries, the trend seems to be varying over time. Another important feature is that volatility seems to vary. By looking at the quarter on quarter percentage growth series, it becomes clear that some periods are marked by significantly more severe swings than normal periods. In particular, it appears that  growth was the most volatile during the start of the series, entered a period of relative calmness, and was then severly disturbed again during the Great Recession of 2008 which is overall highly pronounced in the data. The period following the Great Recession was marked by a relatively large volatility during the Euro crisis. The series can thus safely be said to exhibit heteroskedasticity.
 
-The fact that the series shows varying trends makes a direct comparison of the business cycles awry and it is therefore necessary to get rid of this trend. One alternative is to work with the growth data, another is to use a so called Hodrick-Prescott (HP) filter with frequency $\lambda = 1600$, which has been commonly employed on macro economic time series. Despite the fact that the HP filter is known to contain some flaws cite cite, I choose to use this method to get rid of the trend as it is a standard method.
+The fact that the series shows varying trends makes a direct comparison of the business cycles awry and it is therefore necessary to get rid of this trend. One alternative is to work with the growth data, another is to use a so called Hodrick-Prescott (HP) filter with frequency $\lambda = 1600$, which has been commonly employed on seasonally adjusted macroeconomic time series, $x_t$, in order to decompose them into $x_t = g_t + c_t$, where $g_t$ is a non stationary trend, and $c_t$ is the unobserved stationary cyclical residual. The idea would then be to work with the stationary component in this exercise. 
 
-In the next figure, the quarter to quarter growth rate is plotted above the cyclical component from the HP filter. After applying the HP-filter, we have eliminated the trend source of variation and now have to deal with a cyclical component that is probably still autocorrelated, i.e. cycles tends to be somewhat persistent.
+However, the HP filter is known to contain some flaws, for example, @cogley1995effects  states that the method is not suitable when the underlying process is believed to be integrated of order 1, in which case first differencing should be performed instead as the HP-filter risks creating business cycles that do not really exist in reality. Whether macroeconomic time series are drifting random walks or trend stationary is left out of the discussion and I choose to use the growth data.
+
+
+In the next figure, the quarter to quarter growth rate is plotted above the cyclical component, $c_t$, from the HP-filter. As can be seen, the series look different making the choice an important one.
 
 ```{r, fig.height = 5, fig.width = 7}
-qgrowth_plot / cyclical_plot
+qgrowth_plot / cyclical_plot + theme(legend.position = "none")
 ```
 
-
-Stochastic trend (p.255 engle)
-From Jong a Pin paper:
-However, as Baxter and King (1999) point out, first differencing does
-remove a trend from a series, but potentially at the cost of a shift in the peaks and
-troughs of the differenced series and a larger volatility
-
+```{r select_detrended_data}
+# convert to xts format
+time <- df_hp$TIME
+df_ts <- df_hp %>% select(-TIME)
+df_ts <- xts(x=df_ts, order.by=time)
+```
 
 # Method, dynamic conditional correlation
 
@@ -176,47 +178,48 @@ Thus, the conditional covariance matrix $H_t$ needs to be specified in order to 
 * Where $\hat{Q}$ is the unconditional correlation covariance matrix of the innovations $z_t$.
 * $0 < \theta_1 + \theta_2 < 1$ With both $\theta_1$ and $\theta_2$ set to zero, we obtain the CCC model where the correlation matrix $R_t$ is assumed to be the constant $R = \bar{Q}$.
 
-What all this means is that we have a specification for a time varying specification of the correlation matrix $R_t$ that is $\mathcal{F}_{t-1}$-measurable, namely that we can estimate it using information available at time $t-1$. What we need to do is to find $p$ and $q$; the number of $\mathbf{B_j}$, and $\mathbf{A_i}$ matrices respectively. 
+What all this means is that we have a specification for a time varying specification of the correlation matrix $R_t$ that is $\mathcal{F}_{t-1}$-measurable, namely that we can estimate it using information available at time $t-1$. What we need to do is to find $p$ and $q$; the number of $\mathbf{B_j}$, and $\mathbf{A_i}$ matrices respectively such that $\mathbf{B_j}$, and $\mathbf{A_i}$ are positive semidefinite.
 
-The fact that the matrices $A_i$ and $B_j$ are diagonal means we only model volatility as it propagates within countries. In theory, one could think of spillover effects and that volatility transmits from one country to another if the two are closely related and one country is hit by a shock that affects trade and flow of people. However, with diagonal matrices $A_i$ and $B_j$, it becomes possible to estimate the univariate time varying conditional volatilities in a first step using a standard or extended GARCH approach and the model does not explode with the number of countries.
+The fact that the matrices $\mathbf{A}_i$ and $\mathbf{B}_j$ are diagonal means we only model volatility as it propagates within countries. In theory, one could think of spillover effects and that volatility transmits from one country to another if the two are closely related and one country is hit by a shock that affects trade and flow of people. However, with diagonal matrices $\mathbf{A}_i$ and $\mathbf{B}_j$, it becomes possible to estimate the univariate time varying conditional volatilities in a first step using a standard or extended GARCH approach and the model does not explode with the number of countries.
 
-The first estimation step starts by specifying the univariate conditional variances using GARCH methods for each country. For the univariate GARCH(p,q) model, there will be both an autoregressive, and a moving average component whose orders $p$ and $q$ can be pinned down with the help of ACF and PACF plots of the squared error residuals. This procedure also needs to be done for the conditional mean which is assumed to follow an ARMA(p',q') model. Note that by first specifying univariate GARCH processes, we choose to not model the full variance covariance matrix, which includes volatility spillover effects. Instead, focus is to model conditional correlations over time.
+The first estimation step starts by specifying the univariate conditional variances using GARCH methods for each country. For the univariate GARCH(p,q) model, there will be both an autoregressive, and a moving average component whose orders $p$ and $q$ can be pinned down with, for example, ACF and PACF plots of the squared error residuals. This procedure also needs to be done for the conditional mean which is assumed to follow an ARMA(p',q') model. Note that by first specifying univariate GARCH processes, we choose to not model the full variance covariance matrix, which includes volatility spillover effects. Instead, focus is to model conditional correlations over time.
 
 From this step, the standardized residuals can be calculated which are used in a second step to calculate the unconditional correlation matrix $\bar{Q}$ from the data. Next, all the entries in the matrices $\mathbf{A_i}$, and $\mathbf{B_j}$ will need to be specified, along with the parameters $\theta_1$, and $\theta_2$. This is done by using the packages rugarch and rmgarch by @Ghalanos with built in quasi maximum likelihood routines. Ultimately, we obtain a conditional correlation matrix, $R_t$ and so the conditional covariance matrix $H_t$ which was our initial goal. We then check that the remaining residuals follows a white noise process to ensure that we were able to capture all the relevant information in our model.
 
 
-
-
-
-
+---
 $h_t$ matrix of the indivudal conditional vairances. Can be written as the formula fof a garch. With diagonal maytrices A and B, we get no spillover effects. A and B must be posirtive semidefinite. With diagonality imposed, it is the same as second order stationarity, non negatvity of the coefficients. Strict positivity of the constant coefficient for the different models. 
 $D_t$ diagonal matrix with indoivdual conditional volatilties
 $\epsilon_t^2$ is a vector of the squared past returns for the m assets
 $H_t = D_t R D_t$ COnditional covariance
 
+# Assumes that the conditional variance are deteminsitic min 44 lecture 3 at break to chapter 2.
+# Second order stationarity slide 4 ch 4.
+---
 
-dcc:
+## Estimation stage 
 
-Assumes that the conditional variance are deteminsitic min 44 lecture 3 at break to chapter 2.
+---
+(identification of orders p and q, step 2 slide 30 chapter 1)
+---
 
-Second order stationarity slide 4 ch 4.
+In this section, the goal is to arrive at a parsimonous specification of the conditional mean and variance. An initial consideration is whether to model all countries using the same model, or allow for flexible fits tailored to each country. While allowing for specific models is somewhat less parsimonous than imposing the same structure, I choose to allow for specific models because the series are different and may thus behave differently. This is implemented by automatic modelling using the the function auto.arima from the R package forecast by @hyndmanforecast. This can be used for both the conditional mean and variance, and the model for the variance is obtained by first squaring the series. However, I also provide classic ACF and PACF plots for Germany to characterise the data.
 
-## Estimation stage (identification of orders p and q, step 2 slide 30 chapter 1)
+The alternative to modelling each country individually would be to limit the analysis to focus on a single country, and then apply the best model on all other countries. This path was pursued but did was unsuccesful because the series display large differences in behavior. 
 
-In this section, the goal is to arrive at a parsimonous specification of the conditional mean and variance. 
+It is possible that the normal distribution is unable to account for the large decrease in GDP during the Great Recession, which indicates a clear dent in the series. This is also specified in what follows.
 
-While the analysis supposedly covers several countries, the ARMA and GARCH modelling is limited to cover just a single country which is then applied on the other countries. The alternative would be to repeat the analysis once for each country, and potentially arrive at highly specialised models for each country. However, I limit the analysis to focus on a single country, and then apply the best model on all other countries. A seemingly suitable candidate for finding a good model specification would be the Euro Area composite variable as it is a weighted average of multiple countries, but as it lacks data prior to 1995, I choose the longest time series for the largest country available, namely Germany. 
-
-It is possible that the normal distribution is unable to account for the large decrease in GDP during the Great Recession, which indicates a clear dent in the series.
-
+---
 In addition, I'm allowing for assymetric effects as volatility may reasonably be larger following negative growth (https://www.researchgate.net/profile/Kevin_Sheppard/publication/5213502_Asymmetric_Dynamics_in_the_Correlations_of_Global_Equity_and_Bond_Returns/links/0c96052df10e17001d000000/Asymmetric-Dynamics-in-the-Correlations-of-Global-Equity-and-Bond-Returns.pdf) negative correlation (instead of zero correlation) between the squared current innovation and the past innovations
 
 Possible to test for a leverage effect.
 
 Possible to plot a news impact curve
+---
 
 ### Conditional mean
 Starting with the conditional mean, I look at the ACF and PACF for Germany.
+
 
 ```{r mean_id_deu, fig.height = 3.5, fig.width = 3.5}
 # ii) a priori identification of the orders p and q;
@@ -236,10 +239,7 @@ acf(data.frame(df_ts$FRA), main = "FRA")
 pacf(data.frame(df_ts$FRA), main = "FRA")
 ```
 
-The pattern looks similar and there is a significant lag of order six. However, the first lags are weak and the fifth is not pronounced and I therefore choose a lag of order four, which includes the same quarter last year, and one lag for each other quarter which seems reasonable. I also want to test a more parsimonous model with an MA term. I therefore have the two following candidates for modelling the conditional mean:
-
-* AR(4)
-* ARMA(1,1)
+The pattern looks similar and there is a significant lag of order six. However, the first lags are weak and the fifth is not pronounced and I therefore choose a lag of order four, which includes the same quarter last year, and one lag for each other quarter which seems reasonable.
 
 ### Conditional variance
 Next, I consider a model of the variance by squaring the series.
@@ -254,34 +254,48 @@ Based on the ACF plot of the squared deviations, there is a persistent correlati
 
 There is no apparent reason to allow the model to have a long memory of past volatility based on the graphs as the correlations fade to zero after relatively few lags. Economically, this means that turbulent growth eventually stabilise into more normal growth variability.
 
-TODO: can GDP volatility be said to be normally distributed or should I use another distribution?
+```{r auto_models}
+# Create univariate GARCH specification object prior to fitting.
+spec_init <- ugarchspec() # Need this to initiate the list
+ugarch_spec_list <- c(spec_init)
+ix <- 0
+for (c in countries){
+  ix <- ix + 1
+  series <- data.frame(df_ts) %>% select(c)
+  arma_model <- auto.arima(series, d = 0,  allowdrift = FALSE, allowmean = FALSE)
+  ar_p <- arma_model$arma[1]
+  ma_q <- arma_model$arma[2]
+  garch_model <- auto.arima(series^2, d = 0, allowdrift = FALSE, allowmean = FALSE)
+  var_ar_p <- garch_model$arma[1]
+  var_ma_p <- garch_model$arma[2]
+  spec <- ugarchspec(mean.model = list(armaOrder = c(ar_p,ma_q)), variance.model = list(model = "sGARCH", garchOrder = c(var_ar_p, var_ma_p)), distribution.model = "snorm")
+  ugarch_spec_list[ix] <- spec
+}
 
-### Estimated model
+```
+
+### Choice of distribution
+It is possible that the innovations cannot be described well by a normal distribution. For this reason, I estimate models of the conditional variance under the assumptions of normality and that they follow a $t$-distribution.
+
+### Assymetric volatilities
+
+There are indications in the litterature that the real GDP growth rate 
+Ho and Tsui (2003)
+in which the negative real GDP shocks seem to have greater influence on future volatilities as compared to
+positive shocks of the same magnitude (Asymmetric volatility of real GDP: Some evidence from Canada, Japan,
+the United Kingdom and the United States)
+
+## Estimated model
 ```{r model}
-# Create a DCC-GARCH specification object prior to fitting.
-spec_ar4_11 <- ugarchspec(mean.model = list(armaOrder = c(4,0)), variance.model = list(garchOrder = c(1, 1)), distribution.model = "norm")
-spec_arma11_11 <- ugarchspec(mean.model = list(armaOrder = c(1,1)), variance.model = list(garchOrder = c(1,1 )))
-
-multispec_ar4_11 <- multispec(replicate(n_countries, spec_ar4_11)) # same as ugarchspec but multivariate setting
-multispec_arma11_11 <- multispec(replicate(n_countries, spec_arma11_11))
-
-dcc_spec_ar4_11 <- dccspec(multispec_ar4_11)
-dcc_spec_arma11_11 <- dccspec(multispec_arma11_11)
+multispecs <- multispec(ugarch_spec_list) # similar to ugarchspec but multivariate setting
+dcc_specs<- dccspec(multispecs)
 ```
 
 ```{r estimate}
 # iii) estimation of the parameters
-# dccfit
-# Estimate univariate models first for robustness
-#multifit <- multifit(multispec, df_ts)
-
-
 # DCC model:
-dccfit_ar4_11 <- dccfit(dcc_spec_ar4_11, df_ts) 
-dccfit_arma11_11 <- dccfit(dcc_spec_arma11_11, df_ts) 
-
-#dccfit_ar4_11
-#dccfit_arma11_11
+dcc.fit <- dccfit(dcc_specs, df_ts) 
+dcc.fit
 ```
 The joint params must be the two extra DCC parameters, close to 1. These params are assumed to be the same for all assets is a rather strong assumption. For this reason, we can find sub groups with different parameters.
 
@@ -291,101 +305,116 @@ Comment on stationarity, slide 17 ch 2.
 
 ```{r standardise_residuals}
 # Here, I standardise the residuals by dividing by the estimated standard deviation
-res <- residuals(dccfit_ar4_11)
-sig <- sigma(dccfit_ar4_11)
-std_res <- res/sig
-
+dcc.res <- residuals(dcc.fit)
+dcc.sig <- sigma(dcc.fit)
+dcc.std_res <- dcc.res/dcc.sig
 ```
 
 
 ### Remaining serial correlation, Test model for mean
 Now, I test whether the estimated GARCH model leads to serially uncorrelated error terms. Ideally, there should not remain any conditional volatility in the seires. The first step towards checking this is to standardise the residuals by dividing them with the estimated conditional standard deviation. Note that this value will in general be unique for each country-time pair because of the properties of the DCC model. The Ljung-Box Q(8)-statistic, is formed which gives a test of the null hypothesis that the lags 1 through 8 are not significantly different from 0, i.e. that the residuals from the AR model follow a white noise process. The choice of 8 is somewhat arbitrary but corresponds to two years of data, which seems long enough to accomodate any lagged effects, and short enough to not dilute the power of the test with lags that are so far away that they likely have no effect on the residuals. Ideally then, this test is not significant for any of the countries if the model suits the data well enough.
 
-Do I then use a GARCH and do the same tests for volatility? Seemingly yes (Engle p137). Look at acf and pacf of the squared residuals.
 
-OR: GARCH models are estimated simultanously by ML. Test for remaining Garch errors using McLeod Li
-
-Theorem of second order stationarity of the GARCH 11 process slide 19 ch 2.
 
 
 ```{r}
 # iv) validation based on residual analysis
-residuals_ar4_11 <- residuals((dccfit_ar4_11))
-#acf(residuals_ar4_11)
-#pacf(residuals_ar4_11)
 # Ljung Box test
 LB_test_p <- c()
 for (c in countries) {
-  test_residuals <- data.frame(residuals_ar4_11) %>% select(c)
+  test_residuals <- data.frame(dcc.std_res) %>% select(c)
   p_value <- Box.test(test_residuals, type = "Ljung", lag = 8)$p.value
   LB_test_p <- c(LB_test_p, p_value)
 }
 LB_test_table <- tibble(countries, LB_test_p)
-plot((residuals_ar4_11)$DEU)
+plot(dcc.std_res$ESP)
 
 
 # Jarque Bera test for normality coupled with QQ plot
-qqnorm(std_res$DEU)
-qqline(std_res$DEU)
+qqnorm(dcc.std_res$DEU)
+qqline(dcc.std_res$DEU)
 ```
 For the conditional mean, I find that...
 
-```{r}
-LB_test_table
+```{r, results = "asis"}
+print(xtable::xtable(LB_test_table), comment=FALSE)
 ```
 
 
 ### Remaining GARCH efects
+
+---
+(Engle p137). Look at acf and pacf of the squared residuals.
+ARCH models are estimated simultanously by ML. Test for remaining Garch errors using McLeod Li
+Theorem of second order stationarity of the GARCH 11 process slide 19 ch 2.
+---
+
 Next, I want to test whether there are remaining GARCH effects, or if the model of the conditional variance is correctly specified. The procedure is similar to when the residuals of the model of the conditional mean was tested with the main difference that it is now the squared standardized series that is being tested. Hence, a Ljung-Box Q(8) statistic is formed for each country.
 
 ```{r cond_variance_LB}
 LB_test_var_p <- c()
 for (c in countries) {
-  test_residuals <- (data.frame(residuals_ar4_11) %>% select(c))^2
+  test_residuals <- (data.frame(dcc.std_res) %>% select(c))^2
   p_value <- Box.test(test_residuals, type = "Ljung", lag = 8)$p.value
   LB_test_var_p <- c(LB_test_var_p, p_value)
 }
 LB_test_table <- tibble(countries, LB_test_var_p)
 
 
-plot((residuals_ar4_11^2)$DEU)
+plot((dcc.std_res^2)$ESP)
 ```
 
 
-```{r selection}
+```{r}
+# Likelihood comparison slide 27 chapter 3
+```
+
+
+
+```{r model_selection}
 # v) select a model 
 ```
 
 
-
+```{r selection}
 # From the better model, we extract the squared residuals for Germany
-german_shock <- (residuals((dccfit_ar4_11))$DEU)^2
+#german_shock <- (residuals((dccfit_ar4_11))$DEU)^2
 
 # Lag the variable:
-german_shock <- lag(german_shock)
+#german_shock <- lag(german_shock)
 
 # And now, I use them as an exogenous regressor for the other countries.
 
-spec_vol_spill <- ugarchspec(mean.model = list(armaOrder = c(4,0)), variance.model = list(garchOrder = c(1, 1)), distribution.model = "norm")
+#spec_vol_spill <- ugarchspec(mean.model = list(armaOrder = c(4,0)), variance.model = list(garchOrder = c(1, 1)), distribution.model = "norm")
 
-multispec_vol_spill <- multispec(replicate(n_countries, spec_vol_spill))
-dcc_vol_spill <- dccspec(multispec_vol_spill, dccOrder = c(0,1))
+#multispec_vol_spill <- multispec(replicate(n_countries, spec_vol_spill))
+#dcc_vol_spill <- dccspec(multispec_vol_spill, dccOrder = c(0,1))
 
 # Then estimate the conditional variance with the lagged variance as exogenous regressor:
-dccfit_vol_spill <- dccfit(dcc_vol_spill, df_ts) 
-dccfit_vol_spill@model$varmodel
-coef(dccfit_vol_spill)
+#dccfit_vol_spill <- dccfit(dcc_vol_spill, df_ts) 
+#dccfit_vol_spill@model$varmodel
+#coef(dccfit_vol_spill)
+```
+
 
 
 
 # Results
 
+---
+## Conditional mean for some country
+
+## Conditional variance for some country
+---
+
+## Conditional correlations
 ```{r extract_data}
 # Extract the data to a format we can easily plot:
-corrs <- rcor(dccfit_ar4_11)
+corrs <- rcor(dcc.fit)
 corrs[,,dim(corrs)[3]] # Inspect last value
 
 gen_dcc_data <- function(base_country){
+  # Function generates a data frame of correlations of one country with all others
  ix <- 1
  corr_df <- data.frame(corrs[base_country,base_country,])
  for (country in countries) {
@@ -401,21 +430,30 @@ gen_dcc_data <- function(base_country){
  return(corr_df)
 }
 
-plot_dcc_data <- function(df){
+# Plot data
+plot_dcc_data <- function(country_ix){
+  df <- gen_dcc_data(country_ix)
   p <- df %>% ggplot(aes(x = Index, y = correlation, color = country)) + 
-    geom_line() + coord_cartesian(ylim = c(-0.1, 0.75))
+    geom_line() + coord_cartesian(ylim = c(-0.1, 0.5)) +
+    labs(subtitle = countries[country_ix]) +
+    theme(legend.position = "none")
   return(p)
 }
 
-# FRA
-fra <- plot_dcc_data(gen_dcc_data(1)) + labs(title = countries[1]) + theme(legend.position = "none")
-# ITA
-ita <- plot_dcc_data(gen_dcc_data(2)) + labs(title = countries[2]) + theme(legend.position = "none")
-# DEU
-deu <- plot_dcc_data(gen_dcc_data(3)) + labs(title = countries[3]) + theme(legend.position = "none")
-# ESP
-esp <- plot_dcc_data(gen_dcc_data(4)) + labs(title = countries[4])
+corr_plots <- lapply(1:length(countries), plot_dcc_data)
 
+
+```
+
+```{r, fig.height = 10, fig.width = 7}
+corr_plots[[1]] / corr_plots[[2]] / corr_plots[[3]] / corr_plots[[4]] / corr_plots[[5]] + theme(legend.position = "bottom")
+```
+
+---
+## Conditional correlation forecast
+---
+
+```{r}
 # Plot average
 avg_correlation <- function(country_list){
   # TODO: how to define this properly?
@@ -435,50 +473,31 @@ avg_correlation <- function(country_list){
 
 ```
 
-```{r}
-(fra + ita) / (deu + esp)
-```
-
 
 ## Table of DCC GARCH estimated results
 * Conditional mean
 * Conditional variance
 
 
-# Comparison of volatiltiy forecasts
 
 # Discussion of relevant periods
 
+---
 # Notes
 ## ARIMA models (notes)
-Ljung box. test jointly that veral autocorrelations of the returns are zero
-
-Slide 29 chapter 1, stationarity assumption is unrealistic ecause of seasonality or cyclical components, remove those components in a first stage of the analysis. 
 
 ARIMA models: Box Jenkins approach, slide 30. Not a big problem of portmanteau rejecting the null of white noise. No problem as the model selection was based on training, next we just care about how good the model is out of sample.
 
 data analysis icluding original discussion of a data set with a clear final goal
 
-Find a stationary process, returns are usually stationary
-
 # Analysis notes
 This analysis was inspired by: https://ro.uow.edu.au/cgi/viewcontent.cgi?article=1280&context=aabfj
 https://www.jstor.org/stable/pdf/27647202.pdf?refreqid=excelsior%3Ada7c65572902730eb32916bc6ff4825c
-
-Two additional params on top of CCC. Very parsimonous, not exploding in number of assets. Assume  nassume same params for every pairs.
-
-Correlation is allowed to be time variant in the DCC (dynamic conditional correlation)
-
-Problems: assumption that two params are the same for al pairs can be a bit relaxed. Assets of similar sectors can be shared for instance. 
-
-Extensions: PCA, factor GARCH. Dimensioanlity reduction.
 
 Explanatory paper of the library rmgarch by the author: https://cran.r-project.org/web/packages/rmgarch/vignettes/The_rmgarch_models.pdf
 
 Paper on gdp synchroisation:
 https://ec.europa.eu/eurostat/documents/3888793/7572028/KS-TC-16-010-EN-N.pdf/969fe12f-cc19-4447-81f0-a5c95265798a
-
-Youtube video: https://www.youtube.com/watch?v=8VXmRl5gzEU&t=27s
 
 A paper using DCC on turkey for finding synchronisation between GDP and stock marketets: https://scholar.google.com/scholar?hl=en&as_sdt=0%2C5&q=Analyzing+the+synchronization+between+the+financial+and+business+cycles+in+Turkey&btnG=
 
@@ -486,9 +505,6 @@ Stock Watson 2005 is authoriative: UNDERSTANDING CHANGES IN INTERNATIONAL BUSINE
 P. 974 about the data used to analyse volatitlity:  "Let yt be the quarterly GDP growth
 at an annual rate". They look att individual countries and not conditional correlation between countries.
 
-Questions:
-* How can we select the right DCC specification?
-
-For disadvantages of rolling correlations: go to cerqueira and martins (2009) for more of this discussion
+---
 
 # References
