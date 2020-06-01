@@ -3,16 +3,17 @@ title: "Euro area gdp synchronization"
 author: "Filip Mellgren"
 date: '2020-05-21'
 output:
-  pdf_document:
-    toc: true
   html_document:
     df_print: kable
+    code_folding: hide
+  pdf_document:
+    toc: true
 bibliography: references.bib
 ---
 
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
 ```
 
 ```{r,include=FALSE}
@@ -37,6 +38,11 @@ countries <-c("DEU", "FRA", "ITA", "ESP", "NLD", "BEL")
 n_countries <- length(countries)
 ```
 
+# TODOs
+* Likelihood in second specification is lower than in the first meaning that it finds a local minimum. May need another start seed.
+* Don't test for normality, but for whether residuals are t-distirbuted as I use this specification
+* Test whether it makes sense to allow for the leverage effect (T-GARCH)
+* Make plots more visual by adding indications of when the EMU was introduced etc.
 
 # Introduction
 
@@ -65,7 +71,8 @@ df <- df %>% dplyr::filter(TIME > start_date, TIME < end_date) %>% select_if(~!a
 
 ```{r, results='asis'}
 # Now, it looks like this:
-print(xtable::xtable(df %>% select(-TIME) %>% head()), comment=FALSE)
+#print(xtable::xtable(df %>% select(-TIME) %>% head()), comment=FALSE)
+df %>% select(-TIME) %>% head()
 ```
 
 ## Stylised facts
@@ -375,6 +382,7 @@ LM_test <- LM_test %>% mutate(rem_garch2 = round(rem_garch2, 3),
 
 
 print(xtable::xtable(cbind(countries, LM_test)), comment=FALSE)
+cbind(countries, LM_test)
 ```
 
 In the table above, P-values are plotted for the McLeod Li test at various levels of lags. The null is again that there is no remaining autoregressive GARCH effects present in the data. We find that most countries are seemingly well defined; only Spain and Italy seem to exhibit autocorrelated squared residuals. See the two ACF and PACF plots for Italy:
@@ -418,6 +426,7 @@ corrbox_test <- corrbox_test %>% mutate(rem_arma2 = round(rem_arma2, 4),
 
 
 print(xtable::xtable(cbind(countries, corrbox_test)), comment=FALSE)
+cbind(countries, corrbox_test)
 ```
 
 This test gives a very strong signal that we need to add an ARMA component. Based on ACF and PACF plots for the Netherlands and Belgium, it is hard to judge what is required and results  for Italy and Spain will be influenced by the need for an extra GARCH component. I therefore decide to add both an extra AR term, and an MA term for all the univariate specifications. I also add an additional GARCH component in the form of an AR term to see if I can accomodate the remaining autocorrealtions for the conditional variance.
@@ -468,7 +477,7 @@ dcc.std_res <- dcc.res/dcc.sig
 
 
 ### Remaining serial correlation, Test model for mean
-Now, I test whether the estimated GARCH model leads to serially uncorrelated error terms. Ideally, there should not remain any conditional volatility in the seires. The first step towards checking this is to standardise the residuals by dividing them with the estimated conditional standard deviation. Note that this value will in general be unique for each country-time pair because of the properties of the DCC model. The corrected Ljung-Box Q(8)-statistic, is formed which gives a test of the null hypothesis that the lags 1 through 8 are not significantly different from 0, i.e. that the residuals from the conditional mean model are stationary. 
+Now, I test whether the estimated GARCH model leads to serially uncorrelated error terms. Ideally, there should not remain any conditional volatility in the seires. The first step towards checking this is to standardise the residuals by dividing them with the estimated conditional standard deviation. Note that this value will in general be unique for each country-time pair because of the properties of the DCC model. The corrected Ljung-Box Q(8)-statistic, is formed which gives a test of the null hypothesis that the lags 1 through 8 are not significantly different from 0, i.e. that the residuals from the conditional mean model are unpredictable.
 
 The choice of 8 is somewhat arbitrary but corresponds to two years of data, which seems long enough to accomodate any lagged effects, and short enough to not dilute the power of the test with lags that are so far away that they likely have no effect on the residuals. Ideally then, this test is not significant for any of the countries if the model suits the data well enough.
 
@@ -545,7 +554,7 @@ cbind(countries, LM_test)
 ```
 
 
-Based on the table above, the model seems capable of reducing the noise component to stationarity for some series, but fails drastically for Spain. 
+Based on the table above, the model seems capable of reducing the noise component to become unpredictable for some series, but fails drastically for Spain. 
 To give a sense of the series, I provide a plot of the German residuals below:
 
 ```{r condvar_normality}
