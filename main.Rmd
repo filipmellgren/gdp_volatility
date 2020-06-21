@@ -38,6 +38,8 @@ countries <-c("DEU", "FRA", "ITA", "ESP", "NLD", "BEL")
 n_countries <- length(countries)
 ```
 
+test
+
 # TODOs
 * Likelihood in second specification is lower than in the first meaning that it finds a local minimum. May need another start seed.
 * Don't test for normality, but for whether residuals are t-distirbuted as I use this specification
